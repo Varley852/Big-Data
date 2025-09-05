@@ -1,0 +1,77 @@
+import pandas as pd
+import requests
+
+
+urls = {
+    "chaves": "https://olinda.bcb.gov.br/olinda/servico/Pix_DadosAbertos/versao/v1/odata/ChavesPix(Data=@Data)?@Data='2023-01-01'&$top=100&$format=json&$select=Data,ISPB,Nome,NaturezaUsuario,TipoChave,qtdChaves",
+    "transacoes_municipio": "https://olinda.bcb.gov.br/olinda/servico/Pix_DadosAbertos/versao/v1/odata/TransacoesPixPorMunicipio(DataBase=@DataBase)?@DataBase='20231'&$top=100&$format=json&$select=AnoMes,Municipio_Ibge,Municipio,Estado_Ibge,Estado,Sigla_Regiao,Regiao,VL_PagadorPF,QT_PagadorPF,VL_PagadorPJ,QT_PagadorPJ,VL_RecebedorPF,QT_RecebedorPF,VL_RecebedorPJ,QT_RecebedorPJ,QT_PES_PagadorPF,QT_PES_PagadorPJ,QT_PES_RecebedorPF,QT_PES_RecebedorPJ",
+    "estatisticas": "https://olinda.bcb.gov.br/olinda/servico/Pix_DadosAbertos/versao/v1/odata/EstatisticasTransacoesPix(Database=@Database)?@Database='20231'&$top=100&$format=json&$select=AnoMes,PAG_PFPJ,REC_PFPJ,PAG_REGIAO,REC_REGIAO,PAG_IDADE,REC_IDADE,FORMAINICIACAO,NATUREZA,FINALIDADE,VALOR,QUANTIDADE"
+}
+
+def requisicao_api(url):
+    resposta = requests.get(url)
+    if resposta.status_code == 200:
+        dados = resposta.json()
+        df = pd.json_normalize(dados["value"])
+        return df
+    else:
+        print(f"Erro {resposta.status_code} na URL: {url}")
+        return pd.DataFrame()
+
+
+df_list = [requisicao_api(u) for u in urls.values()]
+dados_df = pd.concat(df_list, ignore_index=True)
+
+
+print("===== Valores Faltantes =====")
+print(dados_df.isnull().sum())
+print("\n===== Percentual de Nulos =====")
+print((dados_df.isnull().sum() / len(dados_df)) * 100)
+
+
+print("\n===== Tipos de Dados Antes =====")
+print(dados_df.dtypes)
+
+
+if "Data" in dados_df.columns:
+    dados_df["Data"] = pd.to_datetime(dados_df["Data"], errors='coerce')
+
+
+col_num = ["qtdChaves", "VL_PagadorPF", "VL_PagadorPJ", "VL_RecebedorPF", "VL_RecebedorPJ",
+           "QT_PagadorPF", "QT_PagadorPJ", "QT_RecebedorPF", "QT_RecebedorPJ", 
+           "QT_PES_PagadorPF", "QT_PES_PagadorPJ", "QT_PES_RecebedorPF", "QT_PES_RecebedorPJ",
+           "VALOR", "QUANTIDADE"]
+
+for col in col_num:
+    if col in dados_df.columns:
+        dados_df[col] = pd.to_numeric(dados_df[col], errors='coerce')
+
+print("\n===== Tipos de Dados Depois =====")
+print(dados_df.dtypes)
+
+
+renomear = {
+    "quantidadePix": "qtdPix",
+    "VL_PagadorPF": "valor_pagador_pf",
+    "VL_PagadorPJ": "valor_pagador_pj",
+    "VL_RecebedorPF": "valor_recebedor_pf",
+    "VL_RecebedorPJ": "valor_recebedor_pj",
+    "Municipio_Ibge": "municipio_ibge",
+    "Estado_Ibge": "estado_ibge",
+    "QT_PagadorPF": "qt_pagador_pf",
+    "QT_PagadorPJ": "qt_pagador_pj",
+    "QT_RecebedorPF": "qt_recebedor_pf",
+    "QT_RecebedorPJ": "qt_recebedor_pj"
+}
+
+dados_df = dados_df.rename(columns={k: v for k, v in renomear.items() if k in dados_df.columns})
+
+
+dados_df.columns = [col.lower().replace(" ", "_") for col in dados_df.columns]
+
+print("\n===== Colunas Padronizadas =====")
+print(dados_df.columns)
+
+
+dados_df.to_csv("dados_tratados.csv", index=False, encoding="utf-8")
+print("\nDados tratados exportados para 'dados_tratados.csv'")
