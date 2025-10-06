@@ -1,12 +1,13 @@
 import pandas as pd
 import requests
-
+from pymongo import MongoClient
 
 urls = {
-    "chaves": "https://olinda.bcb.gov.br/olinda/servico/Pix_DadosAbertos/versao/v1/odata/ChavesPix(Data=@Data)?@Data='2023-01-01'&$top=100&$format=json&$select=Data,ISPB,Nome,NaturezaUsuario,TipoChave,qtdChaves",
+    "chaves_pix": "https://olinda.bcb.gov.br/olinda/servico/Pix_DadosAbertos/versao/v1/odata/ChavesPix(Data=@Data)?@Data='2023-01-01'&$top=100&$format=json&$select=Data,ISPB,Nome,NaturezaUsuario,TipoChave,qtdChaves",
     "transacoes_municipio": "https://olinda.bcb.gov.br/olinda/servico/Pix_DadosAbertos/versao/v1/odata/TransacoesPixPorMunicipio(DataBase=@DataBase)?@DataBase='20231'&$top=100&$format=json&$select=AnoMes,Municipio_Ibge,Municipio,Estado_Ibge,Estado,Sigla_Regiao,Regiao,VL_PagadorPF,QT_PagadorPF,VL_PagadorPJ,QT_PagadorPJ,VL_RecebedorPF,QT_RecebedorPF,VL_RecebedorPJ,QT_RecebedorPJ,QT_PES_PagadorPF,QT_PES_PagadorPJ,QT_PES_RecebedorPF,QT_PES_RecebedorPJ",
     "estatisticas": "https://olinda.bcb.gov.br/olinda/servico/Pix_DadosAbertos/versao/v1/odata/EstatisticasTransacoesPix(Database=@Database)?@Database='20231'&$top=100&$format=json&$select=AnoMes,PAG_PFPJ,REC_PFPJ,PAG_REGIAO,REC_REGIAO,PAG_IDADE,REC_IDADE,FORMAINICIACAO,NATUREZA,FINALIDADE,VALOR,QUANTIDADE"
 }
+
 
 def requisicao_api(url):
     resposta = requests.get(url)
@@ -19,59 +20,85 @@ def requisicao_api(url):
         return pd.DataFrame()
 
 
-df_list = [requisicao_api(u) for u in urls.values()]
-dados_df = pd.concat(df_list, ignore_index=True)
+dfs = {nome: requisicao_api(link) for nome, link in urls.items()}
 
 
-print("===== Valores Faltantes =====")
-print(dados_df.isnull().sum())
-print("\n===== Percentual de Nulos =====")
-print((dados_df.isnull().sum() / len(dados_df)) * 100)
+def tratar_dados(df):
+    if df.empty:
+        return df
+
+    # Converter data
+    if "Data" in df.columns:
+        df["Data"] = pd.to_datetime(df["Data"], errors="coerce")
+
+    # Converter colunas numéricas
+    col_num = [
+        "qtdChaves", "VL_PagadorPF", "VL_PagadorPJ", "VL_RecebedorPF", "VL_RecebedorPJ",
+        "QT_PagadorPF", "QT_PagadorPJ", "QT_RecebedorPF", "QT_RecebedorPJ",
+        "QT_PES_PagadorPF", "QT_PES_PagadorPJ", "QT_PES_RecebedorPF", "QT_PES_RecebedorPJ",
+        "VALOR", "QUANTIDADE"
+    ]
+    for col in col_num:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    # Renomear colunas
+    renomear = {
+        "quantidadePix": "qtdPix",
+        "VL_PagadorPF": "valor_pagador_pf",
+        "VL_PagadorPJ": "valor_pagador_pj",
+        "VL_RecebedorPF": "valor_recebedor_pf",
+        "VL_RecebedorPJ": "valor_recebedor_pj",
+        "Municipio_Ibge": "municipio_ibge",
+        "Estado_Ibge": "estado_ibge",
+        "QT_PagadorPF": "qt_pagador_pf",
+        "QT_PagadorPJ": "qt_pagador_pj",
+        "QT_RecebedorPF": "qt_recebedor_pf",
+        "QT_RecebedorPJ": "qt_recebedor_pj"
+    }
+    df = df.rename(columns={k: v for k, v in renomear.items() if k in df.columns})
+
+    # Padronizar nomes
+    df.columns = [col.lower().replace(" ", "_") for col in df.columns]
+
+    return df
 
 
-print("\n===== Tipos de Dados Antes =====")
-print(dados_df.dtypes)
+dfs_tratados = {nome: tratar_dados(df) for nome, df in dfs.items()}
+
+# Exportar CSVs
+for nome, df in dfs_tratados.items():
+    if not df.empty:
+        df.to_csv(f"{nome}_tratado.csv", index=False, encoding="utf-8")
+        print(f" Arquivo '{nome}_tratado.csv' exportado.")
 
 
-if "Data" in dados_df.columns:
-    dados_df["Data"] = pd.to_datetime(dados_df["Data"], errors='coerce')
+MONGO_URI = "mongodb+srv://<usuario>:<senha>@cluster0.v7h5atx.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
+client = MongoClient(MONGO_URI, tls=True, tlsAllowInvalidCertificates=True)
+db = client["api_banco_central"]
 
 
-col_num = ["qtdChaves", "VL_PagadorPF", "VL_PagadorPJ", "VL_RecebedorPF", "VL_RecebedorPJ",
-           "QT_PagadorPF", "QT_PagadorPJ", "QT_RecebedorPF", "QT_RecebedorPJ", 
-           "QT_PES_PagadorPF", "QT_PES_PagadorPJ", "QT_PES_RecebedorPF", "QT_PES_RecebedorPJ",
-           "VALOR", "QUANTIDADE"]
+for nome, df in dfs_tratados.items():
+    if df.empty:
+        print(f" Nenhum dado disponível para {nome}, ignorando...")
+        continue
 
-for col in col_num:
-    if col in dados_df.columns:
-        dados_df[col] = pd.to_numeric(dados_df[col], errors='coerce')
+    colecao = db[nome]
+    registros = df.to_dict(orient="records")
 
-print("\n===== Tipos de Dados Depois =====")
-print(dados_df.dtypes)
+    inseridos = 0
+    for doc in registros:
+        # filtro simples para evitar duplicação (ajuste conforme o dataset)
+        filtro = {}
+        if "data" in doc:
+            filtro["data"] = doc["data"]
+        elif "anomes" in doc:
+            filtro["anomes"] = doc["anomes"]
 
+        if filtro and not colecao.find_one(filtro):
+            colecao.insert_one(doc)
+            inseridos += 1
 
-renomear = {
-    "quantidadePix": "qtdPix",
-    "VL_PagadorPF": "valor_pagador_pf",
-    "VL_PagadorPJ": "valor_pagador_pj",
-    "VL_RecebedorPF": "valor_recebedor_pf",
-    "VL_RecebedorPJ": "valor_recebedor_pj",
-    "Municipio_Ibge": "municipio_ibge",
-    "Estado_Ibge": "estado_ibge",
-    "QT_PagadorPF": "qt_pagador_pf",
-    "QT_PagadorPJ": "qt_pagador_pj",
-    "QT_RecebedorPF": "qt_recebedor_pf",
-    "QT_RecebedorPJ": "qt_recebedor_pj"
-}
+    print(f" Coleção '{nome}': {inseridos} novos documentos inseridos no MongoDB.")
 
-dados_df = dados_df.rename(columns={k: v for k, v in renomear.items() if k in dados_df.columns})
-
-
-dados_df.columns = [col.lower().replace(" ", "_") for col in dados_df.columns]
-
-print("\n===== Colunas Padronizadas =====")
-print(dados_df.columns)
-
-
-dados_df.to_csv("dados_tratados.csv", index=False, encoding="utf-8")
-print("\nDados tratados exportados para 'dados_tratados.csv'")
+print("\n Processo concluído com sucesso!")
